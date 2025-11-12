@@ -115,35 +115,30 @@ Thought: I need to analyze this stock query step by step.
         return agent_executor
     
     async def analyze_stock_query(self, query: str, session_id: str = None) -> Dict[str, Any]:
-        """Analyze a stock query using the Langchain agent"""
+        """Analyze a stock query using direct tool execution (bypassing LangChain agent for reliability)"""
         start_time = datetime.utcnow()
         
         try:
-            # Prepare input with current time context
-            agent_input = {
-                "input": query,
-                "current_time": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-            }
-            
-            # Execute the agent
-            result = await self._execute_agent_async(agent_input)
+            # Use direct tool execution instead of LangChain agent for better reliability
+            result = await self._execute_direct_analysis(query)
             
             # Calculate processing time
             processing_time = int((datetime.utcnow() - start_time).total_seconds() * 1000)
             
-            # Parse and structure the response
-            structured_response = self._structure_agent_response(result, query, processing_time)
+            # Add processing time to result
+            result['processing_time_ms'] = processing_time
+            result['timestamp'] = datetime.utcnow().isoformat()
             
             # Store in conversation memory if session provided
             if session_id:
-                self._update_conversation_memory(session_id, query, structured_response)
+                self._update_conversation_memory(session_id, query, result)
             
             logger.info(f"Stock analysis completed in {processing_time}ms for query: {query[:50]}...")
-            return structured_response
+            return result
             
         except Exception as e:
             processing_time = int((datetime.utcnow() - start_time).total_seconds() * 1000)
-            logger.error(f"Stock analysis failed for query '{query}': {e}")
+            logger.error(f"Stock analysis failed for query '{query}': {e}", exc_info=True)
             
             return {
                 'success': False,
@@ -152,11 +147,114 @@ Thought: I need to analyze this stock query step by step.
                 'processing_time_ms': processing_time,
                 'timestamp': datetime.utcnow().isoformat(),
                 'suggestions': [
-                    'Try using a specific company name like "Apple" or "Microsoft"',
+                    'Try using a ticker symbol like "AAPL" or "MSFT"',
                     'Make sure the company is listed on NASDAQ',
                     'Check your spelling and try again'
                 ]
             }
+    
+    async def _execute_direct_analysis(self, query: str) -> Dict[str, Any]:
+        """Execute analysis directly using tools without LangChain agent complexity"""
+        try:
+            # Step 1: Extract ticker from query
+            ticker = await self._extract_ticker_from_query(query)
+            
+            if not ticker:
+                return {
+                    'success': False,
+                    'error': 'Could not identify a stock ticker in your query',
+                    'query': query,
+                    'suggestions': [
+                        'Try using a ticker symbol like "AAPL" for Apple',
+                        'Or use the full company name like "Apple" or "Microsoft"'
+                    ]
+                }
+            
+            # Step 2: Get market data
+            market_data_tool = next((t for t in self.tools if t.name == 'market_data_fetcher'), None)
+            if not market_data_tool:
+                raise Exception("market_data_fetcher tool not found")
+            
+            market_data_result = await market_data_tool._arun(ticker=ticker)
+            market_data = json.loads(market_data_result) if isinstance(market_data_result, str) else market_data_result
+            
+            if not market_data.get('success'):
+                return {
+                    'success': False,
+                    'error': f'Could not fetch market data for {ticker}',
+                    'query': query,
+                    'ticker': ticker
+                }
+            
+            # Step 3: Perform investment analysis
+            investment_tool = next((t for t in self.tools if t.name == 'investment_analyzer'), None)
+            if not investment_tool:
+                raise Exception("investment_analyzer tool not found")
+            
+            analysis_result = await investment_tool._arun(ticker=ticker)
+            analysis = json.loads(analysis_result) if isinstance(analysis_result, str) else analysis_result
+            
+            if not analysis.get('success'):
+                return {
+                    'success': False,
+                    'error': f'Could not perform analysis for {ticker}',
+                    'query': query,
+                    'ticker': ticker
+                }
+            
+            # Step 4: Build response
+            return {
+                'success': True,
+                'query': query,
+                'ticker': ticker,
+                'company_name': market_data.get('company_name', ticker),
+                'current_price': market_data.get('current_price', 0.0),
+                'price_change_percentage': market_data.get('price_change_percentage', 0.0),
+                'recommendation': analysis.get('recommendation', 'Hold'),
+                'confidence_score': analysis.get('confidence_score', 50.0),
+                'response': analysis.get('summary', ''),
+                'extracted_data': {
+                    'market_data': market_data,
+                    'investment_analysis': analysis
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Direct analysis failed: {e}", exc_info=True)
+            raise
+    
+    async def _extract_ticker_from_query(self, query: str) -> Optional[str]:
+        """Extract ticker symbol from query"""
+        try:
+            # First try to find a ticker pattern (2-5 uppercase letters)
+            import re
+            ticker_pattern = r'\b([A-Z]{2,5})\b'
+            matches = re.findall(ticker_pattern, query)
+            
+            if matches:
+                # Validate the first match using the tool from self.tools
+                ticker_validator_tool = next((t for t in self.tools if t.name == 'ticker_validator'), None)
+                if ticker_validator_tool:
+                    for potential_ticker in matches:
+                        result = await ticker_validator_tool._arun(ticker=potential_ticker)
+                        result_data = json.loads(result) if isinstance(result, str) else result
+                        if result_data.get('valid'):
+                            return potential_ticker
+            
+            # If no ticker found, try company name resolution
+            company_resolver_tool = next((t for t in self.tools if t.name == 'company_name_resolver'), None)
+            if company_resolver_tool:
+                result = await company_resolver_tool._arun(company_name=query)
+                result_data = json.loads(result) if isinstance(result, str) else result
+                
+                if result_data.get('success'):
+                    return result_data.get('ticker')
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Ticker extraction failed: {e}", exc_info=True)
+            return None
     
     async def _execute_agent_async(self, agent_input: Dict[str, Any]) -> Dict[str, Any]:
         """Execute the agent asynchronously"""
@@ -172,8 +270,31 @@ Thought: I need to analyze this stock query step by step.
     def _structure_agent_response(self, agent_result: Dict[str, Any], original_query: str, processing_time: int) -> Dict[str, Any]:
         """Structure the agent response into a standardized format"""
         try:
+            # Handle None or empty result
+            if agent_result is None:
+                logger.error("Agent result is None")
+                return {
+                    'success': False,
+                    'error': 'Agent returned no result',
+                    'query': original_query,
+                    'processing_time_ms': processing_time,
+                    'timestamp': datetime.utcnow().isoformat()
+                }
+            
             output = agent_result.get('output', '')
             intermediate_steps = agent_result.get('intermediate_steps', [])
+            
+            # Check if output is None or empty
+            if output is None or (isinstance(output, str) and not output.strip()):
+                logger.warning("Agent output is empty - agent may have hit max iterations")
+                return {
+                    'success': False,
+                    'error': 'Agent failed to generate output. Try using a specific ticker symbol like "AAPL".',
+                    'query': original_query,
+                    'processing_time_ms': processing_time,
+                    'timestamp': datetime.utcnow().isoformat(),
+                    'agent_steps': len(intermediate_steps)
+                }
             
             # Extract structured data from intermediate steps
             extracted_data = self._extract_data_from_steps(intermediate_steps)
@@ -204,7 +325,7 @@ Thought: I need to analyze this stock query step by step.
             return response
             
         except Exception as e:
-            logger.error(f"Failed to structure agent response: {e}")
+            logger.error(f"Failed to structure agent response: {e}", exc_info=True)
             return {
                 'success': False,
                 'error': f'Response structuring failed: {str(e)}',
@@ -336,10 +457,33 @@ class AgentOrchestrator:
             # Execute agent analysis
             agent_result = await self.stock_agent.analyze_stock_query(request.query)
             
-            if agent_result['success']:
+            # Handle None result
+            if agent_result is None:
+                logger.error("Agent returned None result")
+                return AnalysisResponse(
+                    analysis_id='error',
+                    ticker='unknown',
+                    company_name='unknown',
+                    current_price=0.0,
+                    price_change_percentage=0.0,
+                    recommendation='Hold',
+                    confidence_score=0.0,
+                    reasoning='Agent failed to return a result. Please try with a specific ticker symbol like "AAPL" or "MSFT".',
+                    key_factors=[],
+                    risk_assessment='Unable to assess',
+                    summary='Agent execution failed. Try using a ticker symbol directly.',
+                    processing_time_ms=0,
+                    timestamp=datetime.utcnow()
+                )
+            
+            if agent_result.get('success'):
+                # Safely extract nested data
+                extracted_data = agent_result.get('extracted_data', {}) or {}
+                investment_analysis = extracted_data.get('investment_analysis', {}) or {}
+                
                 # Create structured response
                 response = AnalysisResponse(
-                    analysis_id=agent_result.get('extracted_data', {}).get('investment_analysis', {}).get('analysis_id', 'unknown'),
+                    analysis_id=investment_analysis.get('analysis_id', 'unknown'),
                     ticker=agent_result.get('ticker', 'unknown'),
                     company_name=agent_result.get('company_name', 'unknown'),
                     current_price=agent_result.get('current_price', 0.0),
@@ -347,8 +491,8 @@ class AgentOrchestrator:
                     recommendation=agent_result.get('recommendation', 'Hold'),
                     confidence_score=agent_result.get('confidence_score', 50.0),
                     reasoning=agent_result.get('response', ''),
-                    key_factors=agent_result.get('extracted_data', {}).get('investment_analysis', {}).get('key_factors', []),
-                    risk_assessment=agent_result.get('extracted_data', {}).get('investment_analysis', {}).get('risk_assessment', ''),
+                    key_factors=investment_analysis.get('key_factors', []),
+                    risk_assessment=investment_analysis.get('risk_assessment', ''),
                     summary=agent_result.get('response', ''),
                     processing_time_ms=agent_result.get('processing_time_ms', 0),
                     timestamp=datetime.fromisoformat(agent_result['timestamp'].replace('Z', '+00:00'))
@@ -375,7 +519,7 @@ class AgentOrchestrator:
                 )
                 
         except Exception as e:
-            logger.error(f"Agent orchestrator failed: {e}")
+            logger.error(f"Agent orchestrator failed: {e}", exc_info=True)
             return AnalysisResponse(
                 analysis_id='error',
                 ticker='unknown',
