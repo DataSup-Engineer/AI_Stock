@@ -31,6 +31,9 @@ mcp>=0.9.0
 #   pip install agent-protocol==1.0.2
 # This will downgrade fastapi to 0.100.x
 
+# NEST Framework (NANDA Sandbox and Testbed)
+python-a2a>=0.1.0
+
 # Development dependencies
 pytest>=7.4.0,<9.0.0
 pytest-asyncio>=0.21.0,<1.0.0

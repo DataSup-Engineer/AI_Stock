@@ -351,6 +351,239 @@ class LoggingService:
                 'timestamp': datetime.utcnow().isoformat()
             }
     
+    async def log_nest_message(
+        self,
+        message_type: str,
+        direction: str,
+        agent_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        message_content: Optional[str] = None,
+        target_agent_id: Optional[str] = None,
+        status: str = "success",
+        error_message: Optional[str] = None,
+        processing_time_ms: Optional[int] = None,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        Log NEST A2A message send/receive events.
+        
+        Args:
+            message_type: Type of message (e.g., 'stock_query', 'analysis_response', 'agent_forward')
+            direction: 'incoming' or 'outgoing'
+            agent_id: ID of the agent sending/receiving the message
+            conversation_id: Conversation identifier
+            message_content: Content of the message (truncated if too long)
+            target_agent_id: For outgoing messages, the target agent ID
+            status: 'success', 'error', or 'timeout'
+            error_message: Error message if status is 'error'
+            processing_time_ms: Time taken to process the message
+            metadata: Additional metadata
+            
+        Returns:
+            str: Log entry ID
+        """
+        try:
+            # Truncate message content if too long
+            if message_content and len(message_content) > 500:
+                message_content = message_content[:500] + "... (truncated)"
+            
+            nest_log_context = {
+                'log_type': 'nest_message',
+                'message_type': message_type,
+                'direction': direction,
+                'agent_id': agent_id,
+                'conversation_id': conversation_id,
+                'message_content': message_content,
+                'target_agent_id': target_agent_id,
+                'status': status,
+                'error_message': error_message,
+                'processing_time_ms': processing_time_ms,
+                'timestamp': datetime.utcnow().isoformat(),
+                **(metadata or {})
+            }
+            
+            # Store as error log entry with special type for NEST messages
+            error_entry = ErrorLogEntry(
+                error_type='NEST_MESSAGE_LOG',
+                error_message=f"{direction.upper()} {message_type} - {status}",
+                stack_trace=None,
+                context=nest_log_context
+            )
+            
+            log_id = await self.database_service.log_error(error_entry)
+            
+            logger.info(
+                f"NEST message logged: {direction} {message_type} "
+                f"(conversation: {conversation_id}, status: {status})"
+            )
+            return log_id
+            
+        except Exception as e:
+            logger.error(f"Failed to log NEST message: {e}")
+            return "failed_to_log"
+    
+    async def log_nest_registry_operation(
+        self,
+        operation: str,
+        agent_id: str,
+        status: str = "success",
+        error_message: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        Log NEST registry operations (register, lookup, status update, deregister).
+        
+        Args:
+            operation: Type of operation ('register', 'lookup', 'status_update', 'deregister')
+            agent_id: ID of the agent performing the operation
+            status: 'success', 'error', or 'retry'
+            error_message: Error message if status is 'error'
+            metadata: Additional metadata (e.g., target_agent_id for lookup, capabilities for register)
+            
+        Returns:
+            str: Log entry ID
+        """
+        try:
+            registry_log_context = {
+                'log_type': 'nest_registry',
+                'operation': operation,
+                'agent_id': agent_id,
+                'status': status,
+                'error_message': error_message,
+                'timestamp': datetime.utcnow().isoformat(),
+                **(metadata or {})
+            }
+            
+            # Store as error log entry with special type for registry operations
+            error_entry = ErrorLogEntry(
+                error_type='NEST_REGISTRY_LOG',
+                error_message=f"Registry {operation} - {status}",
+                stack_trace=None,
+                context=registry_log_context
+            )
+            
+            log_id = await self.database_service.log_error(error_entry)
+            
+            logger.info(f"NEST registry operation logged: {operation} for {agent_id} ({status})")
+            return log_id
+            
+        except Exception as e:
+            logger.error(f"Failed to log NEST registry operation: {e}")
+            return "failed_to_log"
+    
+    async def get_nest_statistics(self) -> Dict[str, Any]:
+        """
+        Get NEST integration statistics.
+        
+        Returns:
+            Dict containing NEST-specific metrics
+        """
+        try:
+            errors_collection = self.mongodb_client.get_collection('errors')
+            
+            # Get counts for last 24 hours
+            yesterday = datetime.utcnow() - timedelta(days=1)
+            
+            # Count NEST messages
+            nest_messages = await errors_collection.count_documents({
+                'error_type': 'NEST_MESSAGE_LOG',
+                'timestamp': {'$gte': yesterday}
+            })
+            
+            # Count incoming vs outgoing
+            incoming_messages = await errors_collection.count_documents({
+                'error_type': 'NEST_MESSAGE_LOG',
+                'context.direction': 'incoming',
+                'timestamp': {'$gte': yesterday}
+            })
+            
+            outgoing_messages = await errors_collection.count_documents({
+                'error_type': 'NEST_MESSAGE_LOG',
+                'context.direction': 'outgoing',
+                'timestamp': {'$gte': yesterday}
+            })
+            
+            # Count successful vs failed messages
+            successful_messages = await errors_collection.count_documents({
+                'error_type': 'NEST_MESSAGE_LOG',
+                'context.status': 'success',
+                'timestamp': {'$gte': yesterday}
+            })
+            
+            failed_messages = await errors_collection.count_documents({
+                'error_type': 'NEST_MESSAGE_LOG',
+                'context.status': {'$in': ['error', 'timeout']},
+                'timestamp': {'$gte': yesterday}
+            })
+            
+            # Count registry operations
+            registry_operations = await errors_collection.count_documents({
+                'error_type': 'NEST_REGISTRY_LOG',
+                'timestamp': {'$gte': yesterday}
+            })
+            
+            # Count successful registry operations
+            successful_registry = await errors_collection.count_documents({
+                'error_type': 'NEST_REGISTRY_LOG',
+                'context.status': 'success',
+                'timestamp': {'$gte': yesterday}
+            })
+            
+            # Get average processing time for messages
+            pipeline = [
+                {
+                    '$match': {
+                        'error_type': 'NEST_MESSAGE_LOG',
+                        'context.processing_time_ms': {'$exists': True},
+                        'timestamp': {'$gte': yesterday}
+                    }
+                },
+                {
+                    '$group': {
+                        '_id': None,
+                        'avg_processing_time': {'$avg': '$context.processing_time_ms'},
+                        'max_processing_time': {'$max': '$context.processing_time_ms'},
+                        'min_processing_time': {'$min': '$context.processing_time_ms'}
+                    }
+                }
+            ]
+            
+            processing_stats = await errors_collection.aggregate(pipeline).to_list(length=1)
+            
+            stats = {
+                'service': 'NEST Integration',
+                'period': '24 hours',
+                'messages': {
+                    'total': nest_messages,
+                    'incoming': incoming_messages,
+                    'outgoing': outgoing_messages,
+                    'successful': successful_messages,
+                    'failed': failed_messages,
+                    'success_rate': f"{(successful_messages / nest_messages * 100):.1f}%" if nest_messages > 0 else "N/A"
+                },
+                'registry': {
+                    'total_operations': registry_operations,
+                    'successful_operations': successful_registry,
+                    'success_rate': f"{(successful_registry / registry_operations * 100):.1f}%" if registry_operations > 0 else "N/A"
+                },
+                'performance': processing_stats[0] if processing_stats else {
+                    'avg_processing_time': None,
+                    'max_processing_time': None,
+                    'min_processing_time': None
+                },
+                'timestamp': datetime.utcnow().isoformat()
+            }
+            
+            return stats
+            
+        except Exception as e:
+            logger.error(f"Failed to get NEST statistics: {e}")
+            return {
+                'service': 'NEST Integration',
+                'error': str(e),
+                'timestamp': datetime.utcnow().isoformat()
+            }
+    
     async def export_logs(self, start_date: datetime, end_date: datetime, 
                          log_type: str = 'analyses') -> List[Dict[str, Any]]:
         """Export logs for a date range"""

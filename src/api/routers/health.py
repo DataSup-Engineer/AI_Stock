@@ -105,6 +105,33 @@ async def system_status() -> Dict[str, Any]:
         except Exception:
             a2a_health = {"status": "error", "message": "Failed to get A2A handler status"}
         
+        # Get NEST integration status
+        try:
+            from main import get_nest_adapter
+            from src.services.logging_service import logging_service
+            
+            nest_adapter = get_nest_adapter()
+            if nest_adapter:
+                nest_health = await nest_adapter.get_status()
+                
+                # Add NEST metrics from logging service
+                try:
+                    nest_metrics = await logging_service.get_nest_statistics()
+                    nest_health['metrics'] = nest_metrics
+                except Exception as metrics_error:
+                    logger.warning(f"Failed to get NEST metrics: {metrics_error}")
+                    nest_health['metrics'] = {"error": str(metrics_error)}
+            else:
+                nest_health = {
+                    "status": "disabled",
+                    "message": "NEST integration is not enabled"
+                }
+        except Exception as e:
+            nest_health = {
+                "status": "error",
+                "message": f"Failed to get NEST status: {str(e)}"
+            }
+        
         return {
             "service": "NASDAQ Stock Agent",
             "version": "1.0.0",
@@ -115,7 +142,8 @@ async def system_status() -> Dict[str, Any]:
                 "market_data_service": market_health,
                 "analysis_service": analysis_health,
                 "mcp_server": mcp_health,
-                "a2a_handler": a2a_health
+                "a2a_handler": a2a_health,
+                "nest_integration": nest_health
             },
             "timestamp": datetime.utcnow().isoformat()
         }
@@ -226,6 +254,110 @@ async def mcp_server_status() -> Dict[str, Any]:
             status_code=500,
             detail={
                 "error": f"MCP server status check failed: {str(e)}",
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        )
+
+
+@router.get("/nest")
+async def nest_status() -> Dict[str, Any]:
+    """
+    Get NEST integration status
+    
+    Returns detailed information about the NEST adapter including agent ID,
+    A2A endpoint, registry status, health information, and metrics.
+    """
+    try:
+        from main import get_nest_adapter
+        from src.services.logging_service import logging_service
+        
+        nest_adapter = get_nest_adapter()
+        
+        if not nest_adapter:
+            return {
+                "status": "disabled",
+                "message": "NEST integration is not enabled. Set NEST_ENABLED=true to enable.",
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        
+        # Get comprehensive NEST status
+        nest_status = await nest_adapter.get_status()
+        
+        # Get NEST metrics from logging service
+        try:
+            nest_metrics = await logging_service.get_nest_statistics()
+            nest_status['metrics'] = nest_metrics
+        except Exception as metrics_error:
+            logger.warning(f"Failed to get NEST metrics: {metrics_error}")
+            nest_status['metrics'] = {"error": str(metrics_error)}
+        
+        return {
+            "success": True,
+            "nest_status": nest_status,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+    except ImportError as e:
+        logger.warning(f"NEST integration not available: {e}")
+        return {
+            "status": "not_available",
+            "message": "NEST integration requires python-a2a package. Install with: pip install python-a2a",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Failed to get NEST status: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": f"NEST status check failed: {str(e)}",
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        )
+
+
+@router.get("/nest/config")
+async def nest_agent_config() -> Dict[str, Any]:
+    """
+    Get NEST agent configuration
+    
+    Returns the complete agent configuration including agent_id, agent_name,
+    domain, specialization, expertise, capabilities, and other metadata.
+    This endpoint is used by other agents to discover and communicate with this agent.
+    """
+    try:
+        from main import get_nest_adapter
+        
+        nest_adapter = get_nest_adapter()
+        
+        if not nest_adapter:
+            return {
+                "status": "disabled",
+                "message": "NEST integration is not enabled. Set NEST_ENABLED=true to enable.",
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        
+        # Get agent configuration
+        agent_config = nest_adapter.get_agent_config()
+        
+        return {
+            "success": True,
+            "agent_config": agent_config,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+    except ImportError as e:
+        logger.warning(f"NEST integration not available: {e}")
+        return {
+            "status": "not_available",
+            "message": "NEST integration requires python-a2a package. Install with: pip install python-a2a",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Failed to get NEST agent config: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": f"NEST agent config retrieval failed: {str(e)}",
                 "timestamp": datetime.utcnow().isoformat()
             }
         )
