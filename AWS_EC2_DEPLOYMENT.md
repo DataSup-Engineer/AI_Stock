@@ -9,6 +9,22 @@ Complete step-by-step guide to deploy the NASDAQ Stock Agent on AWS EC2 using Do
 - Anthropic API key ([Get one here](https://console.anthropic.com/))
 - Basic knowledge of SSH and command line
 
+## 🖥️ Choosing Your Operating System
+
+This guide supports both **Ubuntu** and **Amazon Linux**. Choose based on your preference:
+
+| Feature | Ubuntu 22.04 LTS | Amazon Linux 2023 |
+|---------|------------------|-------------------|
+| **Ease of Use** | ⭐⭐⭐⭐⭐ Very beginner-friendly | ⭐⭐⭐⭐ AWS-optimized |
+| **Package Manager** | apt-get | yum/dnf |
+| **Default User** | ubuntu | ec2-user |
+| **Docker Support** | Excellent | Excellent |
+| **Community Support** | Larger community | AWS-focused |
+| **Updates** | LTS (5 years) | Rolling release |
+| **Recommendation** | **Best for beginners** | **Best for AWS experts** |
+
+**Our Recommendation:** Use **Ubuntu 22.04 LTS** if you're new to Linux or want more community support. Use **Amazon Linux 2023** if you're familiar with AWS and prefer AWS-optimized images.
+
 ## 🚀 Part 1: Launch EC2 Instance
 
 ### Step 1: Login to AWS Console
@@ -21,7 +37,9 @@ Complete step-by-step guide to deploy the NASDAQ Stock Agent on AWS EC2 using Do
 
 **Basic Details:**
 - **Name**: `nasdaq-stock-agent`
-- **Application and OS Images (AMI)**: Ubuntu Server 22.04 LTS
+- **Application and OS Images (AMI)**: 
+  - **Option 1**: Ubuntu Server 22.04 LTS (Recommended)
+  - **Option 2**: Amazon Linux 2023 AMI
 - **Architecture**: 64-bit (x86)
 
 **Instance Type:**
@@ -80,12 +98,22 @@ chmod 400 nasdaq-agent-key.pem
 
 ### Step 2: Connect via SSH
 
+**For Ubuntu:**
 ```bash
 # Replace with your actual public IP
 ssh -i nasdaq-agent-key.pem ubuntu@YOUR_EC2_PUBLIC_IP
 
 # Example:
 # ssh -i nasdaq-agent-key.pem ubuntu@54.123.45.67
+```
+
+**For Amazon Linux:**
+```bash
+# Replace with your actual public IP
+ssh -i nasdaq-agent-key.pem ec2-user@YOUR_EC2_PUBLIC_IP
+
+# Example:
+# ssh -i nasdaq-agent-key.pem ec2-user@54.123.45.67
 ```
 
 **First time connection:**
@@ -98,6 +126,7 @@ ssh -i nasdaq-agent-key.pem ubuntu@YOUR_EC2_PUBLIC_IP
 
 ### Step 1: Update System
 
+**For Ubuntu:**
 ```bash
 # Update package list
 sudo apt-get update
@@ -106,8 +135,15 @@ sudo apt-get update
 sudo apt-get upgrade -y
 ```
 
+**For Amazon Linux:**
+```bash
+# Update package list
+sudo yum update -y
+```
+
 ### Step 2: Install Docker
 
+**For Ubuntu:**
 ```bash
 # Download Docker installation script
 curl -fsSL https://get.docker.com -o get-docker.sh
@@ -125,10 +161,32 @@ newgrp docker
 docker --version
 ```
 
-**Expected output:** `Docker version 24.x.x, build xxxxxxx`
+**For Amazon Linux:**
+```bash
+# Install Docker
+sudo yum install docker -y
+
+# Start Docker service
+sudo systemctl start docker
+
+# Enable Docker to start on boot
+sudo systemctl enable docker
+
+# Add current user to docker group
+sudo usermod -aG docker ec2-user
+
+# Apply group changes
+newgrp docker
+
+# Verify Docker installation
+docker --version
+```
+
+**Expected output:** `Docker version 24.x.x, build xxxxxxx` (or similar)
 
 ### Step 3: Install Docker Compose
 
+**For Both Ubuntu and Amazon Linux:**
 ```bash
 # Download Docker Compose
 sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
@@ -141,6 +199,19 @@ docker-compose --version
 ```
 
 **Expected output:** `Docker Compose version v2.x.x`
+
+### Step 4: Install Git (Amazon Linux only)
+
+**For Amazon Linux:**
+```bash
+# Git is usually pre-installed, but if not:
+sudo yum install git -y
+
+# Verify
+git --version
+```
+
+**For Ubuntu:** Git is pre-installed
 
 ## 📦 Part 4: Deploy Application
 
@@ -456,6 +527,7 @@ curl http://registry.chat39.com:6900/health
 
 ### 2. Setup Firewall
 
+**For Ubuntu (UFW):**
 ```bash
 # Install UFW
 sudo apt-get install ufw -y
@@ -476,14 +548,49 @@ sudo ufw enable
 sudo ufw status
 ```
 
+**For Amazon Linux (firewalld):**
+```bash
+# Start firewalld
+sudo systemctl start firewalld
+sudo systemctl enable firewalld
+
+# Configure firewall
+sudo firewall-cmd --permanent --add-port=22/tcp    # SSH
+sudo firewall-cmd --permanent --add-port=80/tcp    # HTTP
+sudo firewall-cmd --permanent --add-port=443/tcp   # HTTPS
+sudo firewall-cmd --permanent --add-port=8000/tcp  # FastAPI
+sudo firewall-cmd --permanent --add-port=6000/tcp  # NEST
+
+# Reload firewall
+sudo firewall-cmd --reload
+
+# Check status
+sudo firewall-cmd --list-all
+```
+
 ### 3. Enable Automatic Updates
 
+**For Ubuntu:**
 ```bash
 # Install unattended-upgrades
 sudo apt-get install unattended-upgrades -y
 
 # Enable automatic updates
 sudo dpkg-reconfigure -plow unattended-upgrades
+```
+
+**For Amazon Linux:**
+```bash
+# Enable automatic security updates
+sudo yum install yum-cron -y
+
+# Start and enable yum-cron
+sudo systemctl start yum-cron
+sudo systemctl enable yum-cron
+
+# Configure for security updates only
+sudo sed -i 's/update_cmd = default/update_cmd = security/' /etc/yum/yum-cron.conf
+sudo systemctl restart yum-cron
 ```
 
 ### 4. Change Default Passwords
@@ -508,9 +615,19 @@ crontab -e
 
 ### Monitor Resource Usage
 
+**For Ubuntu:**
 ```bash
 # Install htop for better monitoring
 sudo apt-get install htop -y
+
+# Run htop
+htop
+```
+
+**For Amazon Linux:**
+```bash
+# Install htop for better monitoring
+sudo yum install htop -y
 
 # Run htop
 htop
@@ -535,6 +652,8 @@ If your agent is slow:
 4. Reconnect and restart services
 
 ## 🎯 Quick Reference Commands
+
+### Common Commands (Both OS)
 
 ```bash
 # Start services
@@ -565,6 +684,16 @@ curl http://169.254.169.254/latest/meta-data/public-ipv4
 ./startup.sh prod
 ```
 
+### OS-Specific Commands
+
+| Task | Ubuntu | Amazon Linux |
+|------|--------|--------------|
+| **Update packages** | `sudo apt-get update` | `sudo yum update -y` |
+| **Install package** | `sudo apt-get install <pkg>` | `sudo yum install <pkg> -y` |
+| **SSH user** | `ubuntu` | `ec2-user` |
+| **Firewall** | `ufw` | `firewalld` |
+| **Service management** | `systemctl` | `systemctl` |
+
 ## 📞 Support
 
 - **API Documentation**: `http://YOUR_EC2_IP:8000/docs`
@@ -573,20 +702,24 @@ curl http://169.254.169.254/latest/meta-data/public-ipv4
 
 ## ✅ Deployment Checklist
 
-- [ ] EC2 instance launched (t3.medium, Ubuntu 22.04)
+- [ ] EC2 instance launched (t3.medium or t3.micro)
+- [ ] OS selected (Ubuntu 22.04 or Amazon Linux 2023)
 - [ ] Security group configured (ports 22, 80, 443, 8000, 6000)
-- [ ] SSH connection working
+- [ ] SSH connection working (ubuntu@ or ec2-user@)
+- [ ] System updated
 - [ ] Docker installed and verified
 - [ ] Docker Compose installed and verified
+- [ ] Git installed (Amazon Linux)
 - [ ] Repository cloned
 - [ ] .env file created and configured
 - [ ] ANTHROPIC_API_KEY added
 - [ ] MongoDB passwords set
+- [ ] Swap space added (if using t3.micro)
 - [ ] Services started successfully
 - [ ] Health check passing (http://YOUR_IP:8000/)
 - [ ] API documentation accessible
 - [ ] NEST registration verified (if enabled)
-- [ ] Firewall configured
+- [ ] Firewall configured (UFW or firewalld)
 - [ ] Automatic updates enabled
 - [ ] Backup strategy in place
 
