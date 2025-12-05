@@ -472,4 +472,5 @@ This project is licensed under the MIT License.
 
 ---
 
-**Made with ❤️ using Claude AI, FastAPI, and Docker**
+**Using Claude AI Model, FastAPI, and Docker**
+
